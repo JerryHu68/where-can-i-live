@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where can I live?</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  /* The panel borrows from subway signage: black field, white Helvetica,
+     a white rule across the top, and route bullets for the legend. */
+  :root {
+    --sign: #000;
+    --ink: #fff;
+    --quiet: #b9b9b9;
+    --rule: #4a4a4a;
+    --b15: #0039A6; --b30: #00933C; --b45: #FCCC0A; --b60: #FF6319; --b90: #EE352E;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: grid; grid-template-columns: 340px 1fr;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background: var(--sign); color: var(--ink);
+  }
+  #panel {
+    padding: 0 24px 24px; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+  #panel::before { content: ""; display: block; flex: none; height: 5px; background: var(--ink); margin: 14px -24px 0; }
+  h1 { font-size: 30px; line-height: 1.05; letter-spacing: -0.02em; margin: 6px 0 0; font-weight: 700; }
+  .lede { margin: 0; color: var(--quiet); font-size: 14.5px; line-height: 1.45; }
+
+  .field { display: grid; gap: 6px; }
+  .field label, .field .label { font-size: 13px; color: var(--quiet); }
+  select, input[type="time"] {
+    width: 100%; font: inherit; font-size: 16px; font-weight: 700;
+    color: var(--ink); background: var(--sign);
+    border: 0; border-bottom: 2px solid var(--ink); border-radius: 0; padding: 6px 0;
+    color-scheme: dark;
+  }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  input[type="range"] { width: 100%; accent-color: var(--ink); }
+  :focus-visible { outline: 3px solid var(--b45); outline-offset: 3px; }
+  #maxLabel { font-weight: 700; color: var(--ink); }
+
+  .legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .bullet {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: grid; place-items: center; font-weight: 700; font-size: 15px; color: #fff;
+  }
+  .bullet.dim { opacity: .22; }
+  .legend small { flex-basis: 100%; color: var(--quiet); font-size: 13px; }
+
+  #readout { border-top: 1px solid var(--rule); padding-top: 16px; min-height: 96px; }
+  #readout .big { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  #readout p { margin: 8px 0 0; color: var(--quiet); font-size: 14.5px; line-height: 1.4; }
+  #status { margin-top: auto; color: var(--quiet); font-size: 12.5px; line-height: 1.45; }
+  #status.error { color: #ffb4ae; }
+  code { font-family: inherit; font-weight: 700; color: var(--ink); }
+
+  #map { height: 100%; min-height: 60vh; background: #e9e7e2; }
+  .commute-overlay { image-rendering: pixelated; }
+  .leaflet-container { font-family: inherit; cursor: crosshair; }
+  #map:focus-visible { outline: 2px solid #000; outline-offset: -2px; }
+
+  @media (max-width: 760px) {
+    html, body { height: auto; }
+    body { display: block; }
+    #panel { gap: 14px; padding-bottom: 16px; overflow: visible; }
+    h1 { font-size: 24px; }
+    .lede, #readout { display: none; }
+    #status { margin-top: 0; }
+    #map { height: 72vh; }
+  }
+</style>
+</head>
+<body>
+  <aside id="panel">
+    <div>
+      <h1>Where can I live?</h1>
+    </div>
+    <p class="lede">Every part of New York that gets you there on time, by subway and on foot. Click the map to choose a different destination.</p>
+
+    <div class="field">
+      <label for="place">Get to</label>
+      <select id="place"></select>
+    </div>
+
+    <div class="pair">
+      <div class="field">
+        <label for="arrive">Arrive by</label>
+        <input id="arrive" type="time" value="09:00" step="300">
+      </div>
+      <div class="field">
+        <label for="day">On a</label>
+        <select id="day">
+          <option value="weekday">Weekday</option>
+          <option value="saturday">Saturday</option>
+          <option value="sunday">Sunday</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="max">Spend at most <span id="maxLabel">45 minutes</span> door to door</label>
+      <input id="max" type="range" min="15" max="90" step="5" value="45">
+    </div>
+
+    <div class="legend" aria-label="Map colours, in minutes door to door">
+      <span class="bullet" data-limit="15" style="background:var(--b15)">15</span>
+      <span class="bullet" data-limit="30" style="background:var(--b30)">30</span>
+      <span class="bullet" data-limit="45" style="background:var(--b45);color:#000">45</span>
+      <span class="bullet" data-limit="60" style="background:var(--b60)">60</span>
+      <span class="bullet" data-limit="90" style="background:var(--b90)">90</span>
+      <small>Minutes door to door, up to the number shown.</small>
+    </div>
+
+    <div id="readout" aria-live="polite">
+      <div class="big">&nbsp;</div>
+      <p>Point at the map to see the commute from there.</p>
+    </div>
+
+    <div id="status">Loading the timetable.</div>
+  </aside>
+
+  <div id="map" role="application" aria-label="Commute map of New York City"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const BANDS = [[15, [0, 57, 166]], [30, [0, 147, 60]], [45, [252, 204, 10]], [60, [255, 99, 25]], [90, [238, 53, 46]]];
+const UNREACHABLE = 255;
+const CUSTOM = "custom";
+
+const el = id => document.getElementById(id);
+const state = { lat: null, lon: null, result: null, minutes: null, requestId: 0 };
+
+// ---- map -------------------------------------------------------------------
+const map = L.map("map", { preferCanvas: true, zoomControl: true }).setView([40.735, -73.94], 11);
+const credit = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>. Schedule data: MTA.';
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
+  { attribution: credit, subdomains: "abcd", maxZoom: 17 }).addTo(map);
+map.createPane("labels");                       // street names sit above the colours
+map.getPane("labels").style.zIndex = 450;
+map.getPane("labels").style.pointerEvents = "none";
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+  { subdomains: "abcd", maxZoom: 17, pane: "labels" }).addTo(map);
+
+const canvas = document.createElement("canvas");
+let overlay = null;
+const stationLayer = L.layerGroup().addTo(map);
+const destinationMarker = L.circleMarker([0, 0],
+  { radius: 9, color: "#000", weight: 3, fillColor: "#fff", fillOpacity: 1, interactive: false });
+
+// ---- asking the server -------------------------------------------------------
+async function ask() {
+  if (state.lat === null) return;
+  const id = ++state.requestId;
+  setStatus("Working it out.");
+  const query = new URLSearchParams({
+    lat: state.lat, lon: state.lon, arrive: el("arrive").value || "09:00", day: el("day").value,
+  });
+  try {
+    const response = await fetch("/api/commute?" + query);
+    const result = await response.json();
+    if (id !== state.requestId) return;                    // a newer question overtook this one
+    if (!response.ok) throw new Error(result.error || "The server could not answer.");
+    state.result = result;
+    state.minutes = Uint8Array.from(atob(result.grid.minutes), ch => ch.charCodeAt(0));
+    paint();
+    const date = new Date(result.service_date + "T12:00:00")
+      .toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const stranded = result.stations_near_destination === 0
+      ? "No subway station is within a 15 minute walk of that point, so the map only shows walking. " : "";
+    setStatus(stranded + `Using the MTA ${result.day} timetable for ${date}. Answered in ${result.compute_ms} ms. ` +
+              `Subway and walking only, so no buses, ferries or commuter rail.`);
+  } catch (problem) {
+    const text = String(problem.message || problem);
+    setStatus(text.includes("reach.download")
+      ? "No subway schedule found. Run <code>python -m reach.download</code>, then reload this page."
+      : text, true);
+  }
+}
+
+// ---- drawing ---------------------------------------------------------------
+function colourFor(minutes, max) {
+  if (minutes === UNREACHABLE || minutes > max) return null;
+  for (const [limit, rgb] of BANDS) if (minutes <= limit) return rgb;
+  return BANDS[BANDS.length - 1][1];
+}
+
+function paint() {
+  if (!state.result) return;
+  const g = state.result.grid, max = Number(el("max").value);
+  canvas.width = g.width; canvas.height = g.height;
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(g.width, g.height);
+  for (let i = 0; i < state.minutes.length; i++) {
+    const rgb = colourFor(state.minutes[i], max);
+    if (!rgb) continue;
+    image.data[4 * i] = rgb[0]; image.data[4 * i + 1] = rgb[1]; image.data[4 * i + 2] = rgb[2];
+    image.data[4 * i + 3] = 165;
+  }
+  context.putImageData(image, 0, 0);
+  const bounds = [[g.south, g.west], [g.north, g.east]];
+  if (overlay) overlay.setUrl(canvas.toDataURL());
+  else overlay = L.imageOverlay(canvas.toDataURL(), bounds, { className: "commute-overlay", interactive: false }).addTo(map);
+
+  stationLayer.clearLayers();
+  for (const s of state.result.stations) {
+    const here = minutesAt({ lat: s.lat, lng: s.lon });   // only mark stations whose own cell is coloured
+    if (here === null || here === UNREACHABLE || here > max) continue;
+    L.circleMarker([s.lat, s.lon], { radius: 3, color: "#fff", weight: 1, fillColor: "#000", fillOpacity: 1 })
+      .bindTooltip(`${s.name}: walk in by ${clock(s.enter_by)}`)
+      .addTo(stationLayer);
+  }
+  destinationMarker.setLatLng([state.lat, state.lon]).addTo(map).bringToFront();
+
+  el("maxLabel").textContent = `${max} minutes`;
+  document.querySelectorAll(".bullet").forEach((bullet, i) => {
+    const floor = i === 0 ? 0 : BANDS[i - 1][0];
+    bullet.classList.toggle("dim", floor >= max);
+  });
+}
+
+// ---- reading the grid under the pointer --------------------------------------
+const mercator = lat => Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+
+function minutesAt(latlng) {
+  const g = state.result && state.result.grid;
+  if (!g || latlng.lat < g.south || latlng.lat > g.north || latlng.lng < g.west || latlng.lng > g.east) return null;
+  const col = Math.round((latlng.lng - g.west) / (g.east - g.west) * (g.width - 1));
+  const row = Math.round((mercator(g.north) - mercator(latlng.lat)) / (mercator(g.north) - mercator(g.south)) * (g.height - 1));
+  return state.minutes[row * g.width + col];
+}
+
+function clock(hhmm) {                                   // "08:41" -> "8:41 am"
+  const [h, m] = hhmm.split(":").map(Number);
+  return `${(h + 11) % 12 + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "am" : "pm"}`;
+}
+
+function leaveBy(minutes) {
+  const [h, m] = state.result.arrive.split(":").map(Number);
+  const total = ((h * 60 + m - minutes) % 1440 + 1440) % 1440;
+  return clock(`${Math.floor(total / 60)}:${total % 60}`);
+}
+
+function showReadout(latlng) {
+  const minutes = minutesAt(latlng);
+  const big = el("readout").querySelector(".big"), text = el("readout").querySelector("p");
+  if (minutes === null) return;
+  if (minutes === UNREACHABLE) {
+    big.innerHTML = "&nbsp;";
+    text.textContent = "From here you can't make it by subway with a walk of 15 minutes or less.";
+  } else {
+    big.textContent = `${minutes} min`;
+    text.textContent = `Leave this spot by ${leaveBy(minutes)} to arrive by ${clock(state.result.arrive)}.`;
+  }
+}
+
+function setStatus(html, isError = false) {
+  el("status").innerHTML = html;
+  el("status").classList.toggle("error", isError);
+}
+
+// ---- wiring -------------------------------------------------------------------
+map.on("mousemove", event => showReadout(event.latlng));
+map.on("click", event => {
+  state.lat = event.latlng.lat; state.lon = event.latlng.lng;
+  const select = el("place");
+  if (!select.querySelector(`option[value="${CUSTOM}"]`)) select.add(new Option("The point you clicked", CUSTOM));
+  select.value = CUSTOM;
+  ask();
+  showReadout(event.latlng);
+});
+el("max").addEventListener("input", paint);              // recolour only, no request
+el("arrive").addEventListener("change", ask);
+el("day").addEventListener("change", ask);
+el("place").addEventListener("change", event => {
+  const option = event.target.selectedOptions[0];
+  if (option.value === CUSTOM) return;
+  state.lat = Number(option.dataset.lat); state.lon = Number(option.dataset.lon);
+  map.panTo([state.lat, state.lon]);
+  ask();
+});
+
+fetch("/api/places").then(r => r.json()).then(places => {
+  for (const p of places) {
+    const option = new Option(p.name, p.id);
+    option.dataset.lat = p.lat; option.dataset.lon = p.lon;
+    el("place").add(option);
+  }
+  state.lat = places[0].lat; state.lon = places[0].lon;
+  ask();
+}).catch(() => setStatus("Could not reach the server. Start it with <code>python -m reach.server</code>.", true));
+</script>
+</body>
+</html>
