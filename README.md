@@ -103,6 +103,3 @@ python -m pytest
 
 Schedule data from the [MTA developer resources](https://www.mta.info/developers); it is downloaded on your machine and not stored in this repository. The routing approach is the Connection Scan Algorithm (Dibbelt, Pajor, Strasser and Wagner, 2013). The map uses [Leaflet](https://leafletjs.com) with [CARTO](https://carto.com/attributions) basemaps built on [OpenStreetMap](https://www.openstreetmap.org/copyright) data.
 
-## How this was built
-
-This was built as a learning project with AI assistance (Claude), to understand how transit routing works on real timetable data.
